@@ -298,7 +298,9 @@ class StorageAnalyzer:
         
         cleaned_size = 0
         cleaned_count = 0
+        to_delete_items = []
         
+        # Collect all items to delete first
         for category, items in self.results.items():
             if not items:
                 continue
@@ -307,26 +309,36 @@ class StorageAnalyzer:
                 if not item.is_safe_to_delete:
                     continue
                 
+                to_delete_items.append(item)
+                
                 if dry_run:
                     print(f"[DRY RUN] Remove: {item.path} ({self.format_size(item.size)})")
-                else:
-                    try:
-                        if os.path.isdir(item.path):
-                            shutil.rmtree(item.path)
-                        else:
-                            os.remove(item.path)
-                        print(f"✓ Deleted: {item.path}")
-                        cleaned_size += item.size
-                        cleaned_count += 1
-                    except Exception as e:
-                        print(f"✗ Error deleting {item.path}: {e}")
         
+        # Process deletion if not dry run
+        if not dry_run:
+            for item in to_delete_items:
+                try:
+                    if os.path.isdir(item.path):
+                        shutil.rmtree(item.path)
+                    else:
+                        os.remove(item.path)
+                    print(f"✓ Deleted: {item.path}")
+                    cleaned_count += 1
+                    cleaned_size += item.size
+                except Exception as e:
+                    print(f"✗ Error deleting {item.path}: {e}")
+        
+        # Print summary
         print("=" * 70)
-        print(f"Items to clean: {cleaned_count}")
-        print(f"Space to recover: {self.format_size(cleaned_size)}")
-        
         if dry_run:
+            total_to_delete = sum(item.size for item in to_delete_items)
+            print(f"Items to clean: {len(to_delete_items)}")
+            print(f"Space to recover: {self.format_size(total_to_delete)}")
             print("\n💡 Tip: Run dengan --cleanup untuk benar-benar menghapus files")
+        else:
+            print(f"Items cleaned: {cleaned_count}")
+            print(f"Space recovered: {self.format_size(cleaned_size)}")
+            print("\n✅ Cleanup completed!")
 
 def main():
     """Main function"""
