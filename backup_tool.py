@@ -11,6 +11,81 @@ from pathlib import Path
 from typing import List, Dict, Tuple
 from datetime import datetime
 import subprocess
+import time
+
+class ProgressTracker:
+    """Track progress dengan percentage"""
+    
+    def __init__(self, total_size: int):
+        self.total_size = total_size
+        self.copied_size = 0
+        self.start_time = time.time()
+    
+    def format_size(self, bytes_size: int) -> str:
+        """Format ukuran"""
+        for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
+            if bytes_size < 1024:
+                return f"{bytes_size:.2f} {unit}"
+            bytes_size /= 1024
+        return f"{bytes_size:.2f} PB"
+    
+    def get_progress_bar(self, current: int, total: int, width: int = 20) -> str:
+        """Generate progress bar"""
+        if total == 0:
+            return "[" + "█" * width + "]"
+        
+        percentage = current / total
+        filled = int(width * percentage)
+        bar = "█" * filled + "░" * (width - filled)
+        return f"[{bar}]"
+    
+    def get_eta(self, current: int) -> str:
+        """Calculate ETA"""
+        elapsed = time.time() - self.start_time
+        
+        if elapsed > 0 and current > 0:
+            rate = current / elapsed
+            remaining = self.total_size - current
+            eta_seconds = remaining / rate
+            
+            minutes = int(eta_seconds // 60)
+            seconds = int(eta_seconds % 60)
+            
+            if minutes > 0:
+                return f"{minutes}m {seconds}s"
+            else:
+                return f"{seconds}s"
+        
+        return "calculating..."
+    
+    def get_speed(self, current: int) -> str:
+        """Get copy speed"""
+        elapsed = time.time() - self.start_time
+        
+        if elapsed > 0 and current > 0:
+            speed_bps = current / elapsed
+            speed_mbps = speed_bps / (1024 * 1024)
+            return f"{speed_mbps:.1f} MB/s"
+        
+        return "calculating..."
+    
+    def update(self, size: int):
+        """Update progress"""
+        self.copied_size += size
+    
+    def print_progress(self, filename: str):
+        """Print progress line"""
+        percentage = (self.copied_size / self.total_size) * 100
+        progress_bar = self.get_progress_bar(self.copied_size, self.total_size)
+        
+        format_size = self.format_size
+        copied_str = format_size(self.copied_size)
+        total_str = format_size(self.total_size)
+        speed = self.get_speed(self.copied_size)
+        eta = self.get_eta(self.copied_size)
+        
+        progress_line = f"  {filename[:25]:25} {progress_bar} {percentage:5.1f}% ({copied_str} / {total_str}) | {speed} | ETA: {eta}"
+        print(f"\r{progress_line}", end='', flush=True)
 
 class BackupTool:
     """Tool untuk backup files ke external drive"""
@@ -25,6 +100,9 @@ class BackupTool:
                 'total_files': 0,
                 'total_size': 0,
                 'backup_path': '',
+                'start_time': '',
+                'end_time': '',
+                'duration': '',
             }
         }
         
@@ -198,14 +276,34 @@ class BackupTool:
             print(f"  ✗ Not enough space! Need {self.format_size(int(required_with_buffer - free))} more")
             return False
     
-    def backup_files(self, backup_dir: str, backup_plan: Dict) -> bool:
-        """Execute backup"""
+    def copy_with_progress(self, source: str, dest: str, file_size: int, progress_tracker: ProgressTracker):
+        """Copy file dengan progress tracking"""
+        chunk_size = 1024 * 1024  # 1 MB chunks
+        
+        if os.path.isdir(source):
+            shutil.copytree(source, dest, dirs_exist_ok=True)
+            progress_tracker.update(file_size)
+        else:
+            with open(source, 'rb') as src_file:
+                with open(dest, 'wb') as dst_file:
+                    while True:
+                        chunk = src_file.read(chunk_size)
+                        if not chunk:
+                            break
+                        dst_file.write(chunk)
+                        progress_tracker.update(len(chunk))
+    
+    def backup_files(self, backup_dir: str, backup_plan: Dict, total_backup_size: int) -> bool:
+        """Execute backup dengan progress"""
         print(f"\n💾 Starting backup to {backup_dir}...")
         print("=" * 80)
         
         total_files = 0
         total_size = 0
         backed_up_files = []
+        
+        progress_tracker = ProgressTracker(total_backup_size)
+        start_time = time.time()
         
         for category, items in backup_plan.items():
             if not items:
@@ -219,16 +317,12 @@ class BackupTool:
             for item in items:
                 source = item['path']
                 dest = os.path.join(category_dir, item['name'])
+                item_name = item['name']
                 
                 try:
-                    print(f"  Copying {item['name']}... ", end='', flush=True)
-                    
-                    if os.path.isdir(source):
-                        shutil.copytree(source, dest, dirs_exist_ok=True)
-                    else:
-                        shutil.copy2(source, dest)
-                    
-                    print(f"✓ ({self.format_size(item['size'])})")
+                    self.copy_with_progress(source, dest, item['size'], progress_tracker)
+                    progress_tracker.print_progress(item_name)
+                    print()  # New line after progress
                     
                     total_files += 1
                     total_size += item['size']
@@ -242,12 +336,22 @@ class BackupTool:
                     })
                 
                 except Exception as e:
-                    print(f"✗ Error: {e}")
+                    print(f"\n✗ Error: {e}")
+        
+        end_time = time.time()
+        duration = end_time - start_time
         
         self.backup_manifest['files'] = backed_up_files
         self.backup_manifest['stats']['total_files'] = total_files
         self.backup_manifest['stats']['total_size'] = total_size
         self.backup_manifest['stats']['backup_path'] = backup_dir
+        self.backup_manifest['stats']['start_time'] = datetime.fromtimestamp(start_time).isoformat()
+        self.backup_manifest['stats']['end_time'] = datetime.fromtimestamp(end_time).isoformat()
+        
+        # Format duration
+        minutes = int(duration // 60)
+        seconds = int(duration % 60)
+        self.backup_manifest['stats']['duration'] = f"{minutes}m {seconds}s"
         
         return total_files > 0
     
@@ -287,6 +391,7 @@ class BackupTool:
         
         report.append(f"Timestamp: {self.backup_manifest['timestamp']}")
         report.append(f"Backup Location: {self.backup_manifest['stats']['backup_path']}")
+        report.append(f"Duration: {self.backup_manifest['stats']['duration']}")
         report.append("")
         
         report.append(f"Total Files Backed Up: {self.backup_manifest['stats']['total_files']}")
@@ -358,7 +463,7 @@ class BackupTool:
             return False
         
         # Execute backup
-        if not self.backup_files(backup_dir, backup_plan):
+        if not self.backup_files(backup_dir, backup_plan, backup_size):
             print("✗ Backup failed!")
             return False
         
