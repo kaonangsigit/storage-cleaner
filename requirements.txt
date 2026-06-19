@@ -1,0 +1,7 @@
+# No external dependencies required!
+# storage_analyzer.py hanya menggunakan standard library Python
+
+# Tested with:
+# Python 3.7+
+# macOS 10.14+
+# M1 compatible
